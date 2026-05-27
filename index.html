@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OS Ingestion POC</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for JSX compilation in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { background-color: #0a0a0a; color: #f5f5f5; overscroll-behavior-y: none; }
+        .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 20px); }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // The Google Drive Bridge Endpoint
+        const GAS_URL = 'https://script.google.com/macros/s/AKfycbwlb41Tjx_VEUJ8_mGbxP8ypPXnANwhrmc14BArEKOQZYWeQlhG8iHhsJxhYKO3T8xi8g/exec';
+
+        // --- Inline Icons (Replacing Lucide dependencies for static deployment) ---
+        const IconMic = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>;
+        const IconMicOff = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="2" y1="2" x2="22" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>;
+        const IconSend = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>;
+        const IconImage = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>;
+        const IconCopy = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>;
+        const IconLink = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>;
+        const IconX = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>;
+        const IconCheckCircle = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>;
+        const IconLoader = () => <svg className="animate-spin" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>;
+
+        const compressImage = async (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        const MAX_DIMENSION = 800;
+                        if (width > height) {
+                            if (width > MAX_DIMENSION) {
+                                height *= MAX_DIMENSION / width;
+                                width = MAX_DIMENSION;
+                            }
+                        } else {
+                            if (height > MAX_DIMENSION) {
+                                width *= MAX_DIMENSION / height;
+                                height = MAX_DIMENSION;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                        resolve(dataUrl);
+                    };
+                    img.onerror = (error) => reject(error);
+                };
+                reader.onerror = (error) => reject(error);
+            });
+        };
+
+        function App() {
+            const [items, setItems] = useState([]); 
+            const [inputText, setInputText] = useState('');
+            const [isRecording, setIsRecording] = useState(false);
+            const [isUploading, setIsUploading] = useState(false);
+            const [selectedImage, setSelectedImage] = useState(null);
+            const [showUrl, setShowUrl] = useState(false);
+            const fileInputRef = useRef(null);
+            const recognitionRef = useRef(null);
+
+            useEffect(() => {
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    recognitionRef.current = new SpeechRecognition();
+                    recognitionRef.current.continuous = true;
+                    recognitionRef.current.interimResults = true;
+
+                    recognitionRef.current.onresult = (event) => {
+                        let interimTranscript = '';
+                        let finalTranscript = '';
+
+                        for (let i = event.resultIndex; i < event.results.length; ++i) {
+                            if (event.results[i].isFinal) {
+                                finalTranscript += event.results[i][0].transcript;
+                            } else {
+                                interimTranscript += event.results[i][0].transcript;
+                            }
+                        }
+                        
+                        if (finalTranscript) {
+                           setInputText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+                        }
+                    };
+
+                    recognitionRef.current.onerror = (event) => {
+                        console.error("Speech recognition error", event.error);
+                        setIsRecording(false);
+                    };
+                    
+                    recognitionRef.current.onend = () => {
+                        setIsRecording(false);
+                    };
+                }
+            }, []);
+
+            const toggleRecording = () => {
+                if (!recognitionRef.current) {
+                    alert("Voice recognition not supported in this browser. Try Chrome/Safari.");
+                    return;
+                }
+                
+                if (isRecording) {
+                    recognitionRef.current.stop();
+                } else {
+                    recognitionRef.current.start();
+                    setIsRecording(true);
+                }
+            };
+
+            const handleImageSelect = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                setIsUploading(true);
+                try {
+                    const compressedDataUrl = await compressImage(file);
+                    setSelectedImage(compressedDataUrl);
+                } catch (err) {
+                    console.error("Image processing failed", err);
+                } finally {
+                    setIsUploading(false);
+                }
+            };
+
+            const handlePaste = async (e) => {
+                const items = e.clipboardData?.items;
+                if (!items) return;
+
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        const blob = items[i].getAsFile();
+                        setIsUploading(true);
+                        try {
+                            const compressedDataUrl = await compressImage(blob);
+                            setSelectedImage(compressedDataUrl);
+                        } catch (err) {
+                            console.error("Paste failed", err);
+                        } finally {
+                            setIsUploading(false);
+                        }
+                        e.preventDefault(); 
+                        return;
+                    }
+                }
+            };
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!inputText.trim() && !selectedImage) return;
+
+                setIsUploading(true);
+                
+                const payload = {
+                    text: inputText.trim() || "[Image Attached - No Text]",
+                    image: selectedImage, 
+                    type: selectedImage ? 'image_note' : 'text_idea',
+                    timestamp: new Date().toISOString()
+                };
+
+                try {
+                    // Fetch configured for text/plain to bypass CORS Preflight on Google Apps Script
+                    const response = await fetch(GAS_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'text/plain;charset=utf-8',
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const newItem = {
+                        id: Date.now(),
+                        ...payload,
+                        status: 'sent'
+                    };
+                    
+                    setItems(prev => [newItem, ...prev]);
+                    setInputText('');
+                    setSelectedImage(null);
+
+                } catch (err) {
+                    console.error("Failed to send to Google OS", err);
+                    alert("Failed to sync to Google Drive. Check connection.");
+                } finally {
+                    setIsUploading(false);
+                }
+            };
+
+            const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+
+            return (
+                <div 
+                    className="min-h-screen flex flex-col font-sans"
+                    onPaste={handlePaste}
+                >
+                    {/* Header */}
+                    <div className="p-4 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-md sticky top-0 z-10 flex flex-col gap-2">
+                        <div className="flex justify-between items-center w-full">
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>
+                                <h1 className="font-bold text-lg tracking-tight">OS Ingestion</h1>
+                            </div>
+                            <button 
+                                onClick={() => setShowUrl(!showUrl)}
+                                className="text-neutral-400 hover:text-white transition-colors flex items-center gap-1 text-xs font-mono bg-neutral-800 px-3 py-1.5 rounded-full"
+                            >
+                                <IconLink />
+                                GET LINK
+                            </button>
+                        </div>
+
+                        {showUrl && (
+                            <div className="bg-neutral-950 p-3 rounded-lg border border-neutral-700 mt-2 text-xs break-all animate-fade-in">
+                                <p className="text-neutral-400 mb-1 uppercase tracking-wider font-bold text-[10px]">App URL:</p>
+                                <div className="flex gap-2 items-center">
+                                    <code className="flex-1 bg-black p-2 rounded text-blue-400 font-mono">
+                                        {currentUrl}
+                                    </code>
+                                    <button 
+                                        onClick={() => navigator.clipboard.writeText(currentUrl)}
+                                        className="bg-neutral-700 hover:bg-neutral-600 p-2 rounded text-white flex-shrink-0"
+                                    >
+                                        <IconCopy />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Main Feed */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-36 hide-scrollbar">
+                        {items.length === 0 && (
+                            <div className="text-center py-20 opacity-30 mt-10">
+                                <p className="text-4xl mb-4">⚡</p>
+                                <p className="text-lg">Ready to ingest.</p>
+                                <p className="text-sm mt-2 font-mono text-neutral-400">Target: Google Docs</p>
+                            </div>
+                        )}
+
+                        {items.map((item) => (
+                            <div key={item.id} className="group bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden shadow-sm transition-all animate-slide-up">
+                                
+                                {item.image && (
+                                    <div className="relative w-full bg-black/40 border-b border-neutral-800">
+                                        <img 
+                                            src={item.image} 
+                                            alt="Capture" 
+                                            className="w-full h-auto max-h-96 object-contain opacity-80"
+                                        />
+                                    </div>
+                                )}
+
+                                {item.text && item.text !== "[Image Attached - No Text]" && (
+                                    <div className="p-4">
+                                        <p className="whitespace-pre-wrap text-neutral-200 leading-relaxed text-[15px]">
+                                            {item.text}
+                                        </p>
+                                    </div>
+                                )}
+
+                                <div className="px-4 pb-3 pt-2 flex justify-between items-center text-xs text-neutral-500 border-t border-neutral-800/50 mt-1 bg-neutral-900/50">
+                                    <span className="font-mono text-[10px] uppercase tracking-wider">
+                                        {item.type.replace('_', ' ')}
+                                    </span>
+                                    <div className="flex items-center gap-1.5 text-blue-400 font-medium">
+                                        <IconCheckCircle />
+                                        <span>Synced</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Input Area */}
+                    <div className="fixed bottom-0 left-0 right-0 p-4 bg-neutral-950/90 backdrop-blur-xl border-t border-neutral-800 safe-area-bottom">
+                        
+                        {selectedImage && (
+                            <div className="relative mb-3 inline-block">
+                                <img 
+                                    src={selectedImage} 
+                                    alt="Preview" 
+                                    className="h-20 w-auto rounded-lg border border-neutral-700 shadow-xl" 
+                                />
+                                <button 
+                                    onClick={() => setSelectedImage(null)}
+                                    className="absolute -top-2 -right-2 bg-neutral-800 text-white rounded-full p-1.5 border border-neutral-600 shadow-lg hover:bg-neutral-700"
+                                >
+                                    <IconX />
+                                </button>
+                            </div>
+                        )}
+
+                        <form onSubmit={handleSubmit} className="flex gap-2.5 items-end max-w-3xl mx-auto">
+                            <input 
+                                type="file" 
+                                accept="image/*" 
+                                ref={fileInputRef}
+                                className="hidden"
+                                onChange={handleImageSelect}
+                            />
+
+                            <button
+                                type="button"
+                                onClick={() => fileInputRef.current?.click()}
+                                className="p-3 text-neutral-400 bg-neutral-900 rounded-full border border-neutral-800 hover:bg-neutral-700 hover:text-white transition-all shadow-sm"
+                            >
+                                <IconImage />
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={toggleRecording}
+                                className={`p-3 rounded-full border transition-all duration-300 shadow-sm ${
+                                    isRecording 
+                                        ? 'bg-red-500/20 text-red-400 border-red-500/50 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.3)]' 
+                                        : 'text-neutral-400 bg-neutral-900 border-neutral-800 hover:bg-neutral-700 hover:text-white'
+                                }`}
+                            >
+                                {isRecording ? <IconMicOff /> : <IconMic />}
+                            </button>
+
+                            <div className="flex-1 min-w-0 bg-neutral-900 rounded-2xl border border-neutral-700 focus-within:border-blue-500/50 focus-within:shadow-[0_0_15px_rgba(59,130,246,0.1)] transition-all relative">
+                                <textarea
+                                    value={inputText}
+                                    onChange={(e) => setInputText(e.target.value)}
+                                    placeholder="Dictate or type data..."
+                                    className="w-full bg-transparent text-white px-4 py-3 max-h-32 min-h-[48px] focus:outline-none resize-none align-middle text-[15px]"
+                                    rows={1}
+                                    style={{ height: 'auto', overflowY: 'hidden' }}
+                                    onInput={(e) => {
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            handleSubmit(e);
+                                        }
+                                    }}
+                                />
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={(!inputText.trim() && !selectedImage) || isUploading}
+                                className={`p-3 rounded-full flex-shrink-0 transition-all shadow-md ${
+                                    (inputText.trim() || selectedImage)
+                                        ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-[0_0_15px_rgba(37,99,235,0.4)] transform hover:scale-105' 
+                                        : 'bg-neutral-800 text-neutral-600 cursor-not-allowed border border-neutral-800'
+                                }`}
+                            >
+                                {isUploading ? <IconLoader /> : <IconSend />}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
