@@ -572,7 +572,7 @@ function toggleDictation() {
         recognition = null;
         els.app.classList.remove('recording');
         els.micBtn.setAttribute('aria-pressed', 'false');
-        els.input.placeholder = 'Capture a thought…';
+        els.input.placeholder = 'Add a note';
     };
 
     try {

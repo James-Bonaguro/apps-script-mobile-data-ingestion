@@ -181,7 +181,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
     transform-origin: 50% 0;
 }
 .card.enter { animation: card-in 0.5s var(--spring) both; }
-.card-img { display: block; width: 100%; max-height: 420px; object-fit: cover; background: #111; }
+.card-img { display: block; width: 100%; max-height: 360px; object-fit: cover; object-position: 50% 0; background: #111; }
 .card-text { margin: 0; padding: 14px 16px 2px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.45; }
 .card-meta {
     display: flex;
