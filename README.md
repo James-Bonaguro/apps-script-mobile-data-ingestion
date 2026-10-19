@@ -1,35 +1,72 @@
-# Edge-to-Enterprise Data Ingestion POC
+# Edge-to-Enterprise Data Ingestion
 
-This repository contains the front-end Proof of Concept (POC) for a zero-cost, serverless data ingestion pipeline. It is designed to demonstrate how unstructured edge data (voice, field notes, mobile uploads) can be routed directly into a structured enterprise environment (Google Workspace) for AI synthesis.
+A zero-cost, serverless pipeline that routes unstructured edge data (voice, field notes, screenshots) from an iPhone straight into Google Workspace for AI synthesis.
 
 ## Architecture
 
-Edge Capture (The PWA): A frictionless, React-based Progressive Web App optimized for mobile. Bypasses traditional database friction.
+**Edge capture (PWA):** an offline-first Progressive Web App installed to the iOS Home Screen. It runs full-screen with no Safari UI and opens instantly, even in airplane mode. Captures are written to an on-device outbox (IndexedDB) first and sync when the network is back.
 
-Serverless Middleware (Google Apps Script): A secure, zero-cost webhook that receives JSON payloads from the edge app.
+**Serverless middleware (Google Apps Script):** `apps-script/Code.gs` receives JSON captures:
+- text → appended to the target Google Doc under a timestamp
+- image → saved as a file in the Drive folder that holds the Doc, with a link written into the Doc entry
 
-Data Lake (Google Docs): Unstructured text and transcripts are dynamically appended to a centralized Google Document.
+**Data lake (Google Docs + Drive)** feeds **AI synthesis (NotebookLM)**, which indexes the Doc for RAG queries.
 
-AI Synthesis (NotebookLM): Google NotebookLM is mapped to the Google Drive folder, indexing the live document for instant RAG (Retrieval-Augmented Generation) querying.
+## Files
 
-## Tech Stack
+| File | Purpose |
+|---|---|
+| `index.html` | App shell and iOS meta tags |
+| `styles.css` | Dark iOS design system |
+| `app.js` | Capture, dictation, paste, image compression, offline outbox, sync |
+| `sw.js` | Service worker: caches the app shell for instant offline launch |
+| `manifest.json` | PWA manifest |
+| `icons/` | App icon (`icon.svg` is the source), PNG sizes, iPhone launch screens |
+| `apps-script/Code.gs` | Backend; paste into the Apps Script editor |
+| `vercel.json` | Security headers (strict CSP) and service-worker caching rules |
 
-Front-End: React 18, Tailwind CSS (via CDN for zero-build deployment).
+No dependencies, no build step.
 
-Back-End API: Google Apps Script (Serverless).
+## Payload
 
-Storage & Compute: Google Drive / Google NotebookLM.
+`POST` to the Apps Script `/exec` URL with `Content-Type: text/plain`:
 
-## Deployment
+```json
+{
+  "id": "uuid",
+  "createdAt": "2026-10-19T14:05:00.000Z",
+  "text": "Field note…",
+  "image": { "data": "<base64 JPEG, no data: prefix>", "mimeType": "image/jpeg" },
+  "source": "ios-pwa"
+}
+```
 
-This project is configured as a standalone index.html file for instant, zero-configuration deployment on Vercel or Netlify.
+Response: `{ "ok": true, "id", "docUrl", "fileUrl" }` or `{ "ok": false, "retryable": bool, "error" }`. The `id` makes retries idempotent: a capture resent within 6 hours is not appended twice.
 
-## Workflow Execution
+Images are compressed on the phone before upload (long edge ≤ 1600px, JPEG, ≤ ~1.1 MB), keeping screenshots legible and well under Apps Script limits.
 
-User dictates or types a note into the web interface.
+## Why there is no `doOptions`
 
-App fires a POST request to the Apps Script endpoint.
+Apps Script never passes HTTP `OPTIONS` requests to the script, so a CORS preflight can't be handled there. The app avoids preflight entirely by sending a "simple" request (`text/plain` body). Google adds `Access-Control-Allow-Origin: *` to the response, so the app can still read the JSON reply.
 
-Apps Script authenticates and appends the payload to the target Google Doc.
+## Deploy
 
-User queries NotebookLM: "Summarize my field notes from today."
+**Backend**
+1. Open the Apps Script project, replace its code with `apps-script/Code.gs`, set `DOC_ID` to the target Doc's ID.
+2. Run `authorize` once from the editor to grant Docs/Drive access.
+3. Deploy → Manage deployments → edit the existing Web app → Version: **New version**. This keeps the same `/exec` URL. Execute as **Me**, access **Anyone**.
+4. Open the `/exec` URL in a browser; it should return `{"ok":true,"service":"os-ingestion",…}`.
+
+**Front-end**
+Push to the branch Vercel deploys from. No build settings needed. `GAS_URL` lives at the top of `app.js`.
+
+When you change `sw.js` or the list of cached files, bump `VERSION` in `sw.js`. Other asset edits are fetched in the background and appear on the next launch.
+
+**iPhone**
+Open the Vercel URL in Safari → Share → Add to Home Screen. Launch it from the Home Screen icon.
+
+## iOS notes
+
+- **Dictation** (Web Speech API) needs a network on iOS; Apple does the recognition server-side. Offline, use the keyboard's mic. Captures still queue.
+- **Paste:** iOS only fires paste events into a focused text field. The Paste button uses the clipboard API (iOS shows its own "Paste" confirmation) and is the reliable one-tap path for screenshots.
+- **Background sync** isn't available on iOS. The outbox flushes when the app opens, comes back to the foreground, or regains a connection.
